@@ -1,0 +1,5 @@
+string text_prompt
+---
+bool success
+string message
+geometry_msgs/PointStamped final_position

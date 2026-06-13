@@ -1,0 +1,49 @@
+cmake_minimum_required(VERSION 3.8)
+project(openarm_perception_control)
+
+if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+  add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
+find_package(ament_cmake REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
+find_package(moveit_ros_planning_interface REQUIRED)
+find_package(openarm_perception_msgs REQUIRED)
+
+include_directories(include)
+
+add_executable(multi_rate_servo_node
+  src/main.cpp
+  src/multi_rate_servo_node.cpp
+)
+
+ament_target_dependencies(multi_rate_servo_node
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+  tf2_ros
+  tf2_geometry_msgs
+  moveit_ros_planning_interface
+  openarm_perception_msgs
+)
+
+install(TARGETS multi_rate_servo_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(DIRECTORY launch config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  set(ament_cmake_copyright_FOUND TRUE)
+  set(ament_cmake_cpplint_FOUND TRUE)
+  ament_lint_auto_find_test_dependencies()
+endif()
+
+ament_package()

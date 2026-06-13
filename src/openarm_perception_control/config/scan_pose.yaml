@@ -1,0 +1,20 @@
+multi_rate_servo_node:
+  ros__parameters:
+    # Joint values (radians) that position the right-arm wrist camera
+    # directly above the table workspace, looking straight down.
+    # Tune these with the physical robot before running pick tasks.
+    #
+    #   joint1 – base rotation (0 = straight ahead)
+    #   joint2 – shoulder pitch  (negative = lean forward)
+    #   joint3 – upper-arm roll
+    #   joint4 – elbow bend      (~1.6 rad ≈ 90 °)
+    #   joint5 – forearm roll
+    #   joint6 – wrist pitch     (~1.57 rad points camera down)
+    #   joint7 – wrist roll
+    scan_joint_values: [0.0, -0.3, 0.0, 1.6, 0.0, 1.57, 0.0]
+
+    # Metres the gripper rises above the target before descending to pick
+    approach_height: 0.15
+
+    # MoveIt planning timeout in seconds
+    planning_timeout: 10.0
