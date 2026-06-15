@@ -4,22 +4,22 @@ Text-prompted pick-and-place for the OpenArm robot using a wrist-mounted Intel R
 
 ---
 
-## Overview
+## How It Works
 
-A user publishes a plain-English description of an object (e.g. `"red tool"`) to the `/pick_prompt` topic. The system locates it on the table, computes its 3D position, and moves the arm to pick it up — no pre-defined object poses required.
+You type a plain-English description of an object (e.g. `"red cup"`). The system finds it on the table, computes its 3D position, and moves the arm to pick it up — no pre-defined object poses required.
 
 ```
-User:  ros2 topic pub /pick_prompt std_msgs/String "{data: 'red tool'}"
+You type:  ros2 topic pub /pick_prompt std_msgs/String "{data: 'red cup'}"
                          │
                          ▼
         control_node  (C++)
         ┌──────────────────────────────────────┐
         │  1. MoveIt → scan pose               │
-        │     (arm overhead, camera looking    │
-        │      down at the workspace)          │
+        │     (arm moves overhead, camera      │
+        │      looking down at the workspace)  │
         │                                      │
         │  2. Publish → /segment_prompt ──────►│──► sam_perception_node  (Python)
-        │                                      │◄── /pick_target (3D point, camera frame)
+        │                                      │◄── /pick_target (3D point)
         │  3. TF2 transform → planning frame   │
         │                                      │
         │  4. MoveIt → approach → pick         │
@@ -28,173 +28,164 @@ User:  ros2 topic pub /pick_prompt std_msgs/String "{data: 'red tool'}"
 
 ---
 
-## Package Layout
+## Quick Start
 
-```
-src/
-├── openarm_perception_msgs/          # Custom ROS 2 message/service definitions (if used)
-│
-├── openarm_sam_perception/           # Python node — AI perception
-│   ├── openarm_sam_perception/
-│   │   └── sam_perception_node.py    # GroundingDINO + MobileSAM + depth → 3D point
-│   ├── setup.py
-│   ├── setup.cfg
-│   └── package.xml
-│
-└── openarm_perception_control/       # C++ node — arm orchestration
-    ├── include/openarm_perception_control/
-    │   └── control_node.hpp          # ControlNode class declaration
-    ├── src/
-    │   ├── control_node.cpp          # ControlNode method implementations
-    │   └── main.cpp                  # Entry point + MultiThreadedExecutor setup
-    ├── config/
-    │   ├── scan_pose.yaml            # Joint angles for the overhead scan position
-    │   ├── kinematics.yaml           # KDL IK solver config for right_arm
-    │   ├── joint_limits.yaml         # Per-joint velocity/acceleration limits
-    │   ├── moveit_controllers.yaml   # Maps trajectory controllers to planning groups
-    │   └── ros2_controllers.yaml     # ros2_control controller definitions
-    ├── launch/
-    │   └── servo_pipeline.launch.py  # Launches the full pipeline (all nodes)
-    ├── test/
-    │   └── test_pick_object.py       # Manual integration test script
-    ├── CMakeLists.txt
-    └── package.xml
+### Step 1 — Build (only the pipeline packages)
+
+```bash
+# Always source the ROS 2 underlay FIRST, before sourcing the workspace
+source /opt/ros/humble/setup.bash
+
+cd ~/openarm_ws
+
+colcon build --packages-select \
+  openarm_sam_perception \
+  openarm_perception_control
 ```
 
----
+### Step 2 — Source the workspace
 
-## Node Relationships
-
-```
-            [Intel RealSense D-series]
-             /camera/color/image_raw              (RGB, 30 Hz)
-             /camera/aligned_depth_to_color/image_raw  (depth aligned to RGB)
-             /camera/color/camera_info            (intrinsic matrix K, once)
-                        │
-                        ▼
-           ┌────────────────────────────┐
-           │   sam_perception_node      │  (Python)
-           │                            │
-           │  GroundingDINO             │  text prompt → bounding boxes (pixel)
-           │    └─► MobileSAM           │  bounding box → pixel mask
-           │         └─► depth          │  mask + depth + K → 3D centroid
-           │                            │
-           │  Subscribes: /segment_prompt          │
-           │  Publishes:  /pick_target             │
-           └────────────┬───────────────┘
-                        │  geometry_msgs/PointStamped
-                        │  (3D point in camera optical frame)
-                        │
-           ┌────────────▼───────────────┐
-           │   control_node             │  (C++)
-           │                            │
-           │  Subscribes: /pick_prompt  │  ← operator sends text here
-           │  Publishes:  /segment_prompt│ → triggers perception
-           │  Subscribes: /pick_target  │  ← receives 3D result
-           │                            │
-           │  Uses MoveIt move_group ──►│──► [MoveIt / right_arm]
-           │  Uses TF2 for frame xform  │
-           └────────────────────────────┘
+```bash
+# Do this in every terminal you open for this project
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
 ```
 
-### Topic summary
+> **Note:** Always run both `source` lines in this order. Running only
+> `source install/setup.bash` stacks on a stale underlay and causes symbol conflicts.
 
-| Topic | Direction | Type | Purpose |
-|-------|-----------|------|---------|
-| `/pick_prompt` | operator → control_node | `std_msgs/String` | Start a pick |
-| `/segment_prompt` | control_node → sam_perception_node | `std_msgs/String` | Trigger segmentation |
-| `/pick_target` | sam_perception_node → control_node | `geometry_msgs/PointStamped` | 3D object location |
+### Step 3 — Launch the full pipeline
 
----
-
-## Hardware
-
-| Component | Details |
-|-----------|---------|
-| Robot     | OpenArm v2.0 (7-DOF, right arm only) |
-| Camera    | Intel RealSense D-series mounted on the right wrist |
-| GPU       | Optional — GroundingDINO and MobileSAM fall back to CPU if no CUDA device is found |
-
-Only the **right arm** is used. It carries both the pinch gripper and the wrist camera.
-
----
-
-## Code Reference
-
-### `SamPerceptionNode` (Python — `sam_perception_node.py`)
-
-| Method | Role |
-|--------|------|
-| `__init__()` | Declares parameters, loads models, creates subscriptions and publisher |
-| `_load_models()` | Loads GroundingDINO (`load_model`) and MobileSAM (`vit_t`) onto GPU/CPU |
-| `_rgb_cb(msg)` | Caches the latest colour frame (overwrites on every new frame) |
-| `_depth_cb(msg)` | Caches the latest aligned-depth frame |
-| `_info_cb(msg)` | Stores the camera intrinsic matrix `K` once (does not change at runtime) |
-| `_prompt_cb(msg)` | Main handler — snapshots the cached frames, runs steps 1–3, publishes result |
-| `_run_grounding_dino(bgr, prompt)` | BGR image + text → sorted list of pixel bounding boxes `[x1,y1,x2,y2]` |
-| `_run_mobile_sam(bgr, box_xyxy)` | BGR image + box → boolean `H×W` pixel mask |
-| `_mask_to_3d(mask, depth, info)` | Mask + depth + intrinsics → `[X, Y, Z]` metres in camera frame |
-
-**`_mask_to_3d` back-projection formula (pinhole camera model):**
+```bash
+ros2 launch openarm_perception_control servo_pipeline.launch.py
 ```
-Camera intrinsic matrix K (from CameraInfo.k, row-major 9 elements):
-    K = [ fx   0  cx ]      fx = k[0], cx = k[2]
-        [  0  fy  cy ]      fy = k[4], cy = k[5]
-        [  0   0   1 ]
 
-For each valid masked pixel at column u, row v with depth d (metres):
-    X = (u - cx) * d / fx
-    Y = (v - cy) * d / fy
-    Z = d
+Wait for output like `move_group ready` and `sam_perception_node: models loaded` before sending a prompt. Startup takes about 10–15 seconds.
 
-Final 3D point = mean of [X, Y, Z] over all valid masked pixels.
-Valid = depth in [0.05 m, 2.5 m] (filters sensor noise and out-of-range readings).
+### Step 4 — Send a pick prompt
+
+Open a **new terminal**, source again, then publish your text prompt:
+
+```bash
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
+
+# Replace "red cup" with whatever object you want to pick
+ros2 topic pub --once /pick_prompt std_msgs/String "{data: 'red cup'}"
+```
+
+Other example prompts:
+```bash
+ros2 topic pub --once /pick_prompt std_msgs/String "{data: 'blue screwdriver'}"
+ros2 topic pub --once /pick_prompt std_msgs/String "{data: 'yellow bottle'}"
+ros2 topic pub --once /pick_prompt std_msgs/String "{data: 'red tool'}"
 ```
 
 ---
 
-### `ControlNode` (C++ — `control_node.hpp` / `control_node.cpp`)
+## Testing Individual Nodes
 
-| Method | Role |
-|--------|------|
-| `ControlNode()` | Declares params, creates TF2 buffer/listener, two callback groups, pub/subs |
-| `init()` | Creates `MoveGroupInterface("right_arm")` — deferred because it calls `shared_from_this()` |
-| `on_pick_prompt(msg)` | `/pick_prompt` handler — drives scan → segment → pick in sequence; blocks on cbg_prompt_ |
-| `on_pick_target(msg)` | `/pick_target` handler — stores the point in `pending_target_`, signals `target_cv_` |
-| `move_to_scan_pose()` | Joint-space `plan()` + `execute()` to the overhead scan configuration |
-| `wait_for_target(out)` | Blocks on `target_cv_` (30 s timeout), then TF2-transforms the point to planning frame |
-| `move_to_pick_pose(target)` | Plans/executes approach pose, then descends to the pick contact pose |
-| `build_pick_pose(target)` | Converts `PointStamped` to `PoseStamped` with gripper-down orientation (RPY = π, 0, 0) |
+You can run each node in isolation to debug without the full pipeline.
 
-**Threading model (MultiThreadedExecutor):**
-```
-Thread A (cbg_prompt_)                Thread B (cbg_target_)
-──────────────────────────────        ──────────────────────────
-on_pick_prompt() enters
-  move_to_scan_pose()  …waits…
-  publish /segment_prompt
-  wait_for_target():
-    target_cv_.wait_for(30s) ─┐                      sam_perception_node publishes
-                               │       on_pick_target() fires
-                               │         pending_target_ = *msg
-                               │         target_cv_.notify_one()
-    woken ◄────────────────────┘
-  TF2 transform
-  move_to_pick_pose()
+### Test only the perception node (camera + AI)
+
+This lets you verify that GroundingDINO and MobileSAM detect your object correctly, without needing the robot arm or MoveIt.
+
+**Terminal 1 — start a RealSense camera node:**
+```bash
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
+
+ros2 launch realsense2_camera rs_launch.py \
+  align_depth.enable:=true
 ```
 
-A `SingleThreadedExecutor` would deadlock here: Thread A would never yield the spin loop, so Thread B's callback would never run.
+**Terminal 2 — run the perception node alone:**
+```bash
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
+
+ros2 run openarm_sam_perception sam_perception_node \
+  --ros-args \
+  -p grounding_dino_config:=~/openarm_ws/models/GroundingDINO_SwinT_OGC.py \
+  -p grounding_dino_checkpoint:=~/openarm_ws/models/groundingdino_swint_ogc.pth \
+  -p mobile_sam_checkpoint:=~/openarm_ws/models/mobile_sam.pt
+```
+
+**Terminal 3 — send a test prompt and check the result:**
+```bash
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
+
+# Trigger segmentation with a text prompt
+ros2 topic pub --once /segment_prompt std_msgs/String "{data: 'red cup'}"
+
+# Watch the 3D point that comes back
+ros2 topic echo /pick_target
+```
+
+If `/pick_target` publishes a point with non-zero Z, the perception node is working.
 
 ---
 
-### Entry point (`main.cpp`)
+### Test only the control node (arm motion, no camera)
 
+The control node needs MoveIt running but does not need the RealSense camera. Useful for testing arm movements and scan pose calibration.
+
+**Terminal 1 — launch robot + MoveIt only:**
+```bash
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
+
+ros2 launch openarm_perception_control servo_pipeline.launch.py
 ```
-rclcpp::init()
-  → make_shared<ControlNode>()        constructor: params, TF2, pubs/subs
-  → node->init()                      deferred: MoveGroupInterface("right_arm")
-  → MultiThreadedExecutor.spin()      dispatch callbacks to threads
-  → rclcpp::shutdown()                clean up on Ctrl-C
+
+Wait for `move_group ready`.
+
+**Terminal 2 — manually publish a fake 3D target to `/pick_target`:**
+```bash
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
+
+# Publish a fake object location (x=0.3m, y=0.0m, z=0.05m in camera frame)
+ros2 topic pub --once /pick_target geometry_msgs/PointStamped \
+  "{header: {frame_id: 'camera_color_optical_frame'}, point: {x: 0.3, y: 0.0, z: 0.5}}"
+```
+
+Then in a third terminal, trigger the pick sequence:
+```bash
+source /opt/ros/humble/setup.bash
+source ~/openarm_ws/install/setup.bash
+
+ros2 topic pub --once /pick_prompt std_msgs/String "{data: 'test object'}"
+```
+
+---
+
+## Model Checkpoints
+
+Download and place the following files in `~/openarm_ws/models/`:
+
+| File | Source |
+|------|--------|
+| `GroundingDINO_SwinT_OGC.py` | [GroundingDINO repo](https://github.com/IDEA-Research/GroundingDINO) — `groundingdino/config/` |
+| `groundingdino_swint_ogc.pth` | Same repo, releases page |
+| `mobile_sam.pt` | [MobileSAM repo](https://github.com/ChaoningZhang/MobileSAM) |
+
+```bash
+mkdir -p ~/openarm_ws/models
+# place the three files above here
+ls ~/openarm_ws/models/
+# GroundingDINO_SwinT_OGC.py  groundingdino_swint_ogc.pth  mobile_sam.pt
+```
+
+If your checkpoints are in a different location, override the paths at launch time:
+
+```bash
+ros2 launch openarm_perception_control servo_pipeline.launch.py \
+  grounding_dino_config:=/path/to/GroundingDINO_SwinT_OGC.py \
+  grounding_dino_checkpoint:=/path/to/groundingdino_swint_ogc.pth \
+  mobile_sam_checkpoint:=/path/to/mobile_sam.pt
 ```
 
 ---
@@ -216,92 +207,137 @@ sudo apt install \
 pip install torch torchvision groundingdino-py mobile-sam
 ```
 
-### Model checkpoints
-
-Place checkpoints in `~/openarm_ws/models/` (the launch file auto-discovers this path):
-
-| Model | File | Source |
-|-------|------|--------|
-| GroundingDINO config | `GroundingDINO_SwinT_OGC.py` | [GroundingDINO repo](https://github.com/IDEA-Research/GroundingDINO) |
-| GroundingDINO weights | `groundingdino_swint_ogc.pth` | Same repo releases |
-| MobileSAM weights | `mobile_sam.pt` | [MobileSAM repo](https://github.com/ChaoningZhang/MobileSAM) |
-
 ---
 
-## Build
+## Package Layout
 
-```bash
-cd ~/openarm_ws
-source /opt/ros/humble/setup.bash
-
-colcon build --packages-select \
-  openarm_sam_perception \
-  openarm_perception_control
-
-source install/setup.bash
 ```
-
----
-
-## Launch
-
-The launch file starts all nodes (robot_state_publisher, ros2_control, move_group, RViz, sam_perception_node, control_node):
-
-```bash
-ros2 launch openarm_perception_control servo_pipeline.launch.py
-```
-
-Override model paths if they are not in `~/openarm_ws/models/`:
-
-```bash
-ros2 launch openarm_perception_control servo_pipeline.launch.py \
-  grounding_dino_config:=/path/to/GroundingDINO_SwinT_OGC.py \
-  grounding_dino_checkpoint:=/path/to/groundingdino_swint_ogc.pth \
-  mobile_sam_checkpoint:=/path/to/mobile_sam.pt
+src/
+├── openarm_sam_perception/           # Python node — AI perception
+│   └── openarm_sam_perception/
+│       └── sam_perception_node.py    # GroundingDINO + MobileSAM + depth → 3D point
+│
+└── openarm_perception_control/       # C++ node — arm orchestration
+    ├── src/
+    │   ├── control_node.cpp          # ControlNode: scan → segment → pick sequence
+    │   └── main.cpp                  # Entry point + MultiThreadedExecutor
+    ├── config/
+    │   ├── scan_pose.yaml            # Joint angles for the overhead scan position
+    │   ├── kinematics.yaml           # KDL IK solver config
+    │   ├── joint_limits.yaml         # Per-joint velocity/acceleration limits
+    │   ├── moveit_controllers.yaml   # Maps trajectory controllers to planning groups
+    │   └── ros2_controllers.yaml     # ros2_control controller definitions
+    ├── launch/
+    │   └── servo_pipeline.launch.py  # Launches the full pipeline
+    └── test/
+        └── test_pick_object.py       # Manual integration test script
 ```
 
 ---
 
-## Trigger a Pick
+## Topic Reference
 
-```bash
-# Publish directly to the pick prompt topic
-ros2 topic pub --once /pick_prompt std_msgs/String "{data: 'red tool'}"
-
-# Or use the test script
-python3 src/openarm_perception_control/test/test_pick_object.py "red tool"
-python3 src/openarm_perception_control/test/test_pick_object.py "blue screwdriver" --timeout 180
-```
+| Topic | Publisher | Subscriber | Type | Description |
+|-------|-----------|------------|------|-------------|
+| `/pick_prompt` | **you** | control_node | `std_msgs/String` | Your text description (e.g. `"red cup"`) — starts the pick sequence |
+| `/segment_prompt` | control_node | sam_perception_node | `std_msgs/String` | Internal: relays your text to the AI node after the arm reaches scan pose |
+| `/pick_target` | sam_perception_node | control_node | `geometry_msgs/PointStamped` | 3D object location in camera frame |
 
 ---
 
 ## Scan Pose Calibration
 
-The scan pose (joint angles that position the camera directly above the workspace) is defined in `config/scan_pose.yaml`:
+The scan pose (joint angles that position the camera directly above the workspace) is in `config/scan_pose.yaml`:
 
 ```yaml
 scan_joint_values: [0.0, -0.3, 0.0, 1.6, 0.0, 1.57, 0.0]
 #                   j1    j2   j3   j4   j5    j6    j7
 ```
 
-Use `joint_state_publisher_gui` or the RViz joints panel to find the correct values for your physical setup, then update this file before running pick tasks.
+Use `joint_state_publisher_gui` or the RViz joints panel to find the right values for your setup, then update this file before running pick tasks.
 
-### Tuning parameters
+### Tuning Parameters
 
-| Parameter | Default | Where set | Description |
-|-----------|---------|-----------|-------------|
-| `scan_joint_values` | `[0,−0.3,0,1.6,0,1.57,0]` | `scan_pose.yaml` | Overhead camera joint configuration (7 values, radians) |
-| `approach_height` | `0.15` m | `scan_pose.yaml` | Height above object before descending |
+| Parameter | Default | File | Description |
+|-----------|---------|------|-------------|
+| `scan_joint_values` | `[0,−0.3,0,1.6,0,1.57,0]` | `scan_pose.yaml` | Overhead camera joint angles (7 values, radians) |
+| `approach_height` | `0.15` m | `scan_pose.yaml` | Height above object before descending to pick |
 | `planning_timeout` | `10.0` s | `scan_pose.yaml` | MoveIt OMPL time budget per plan call |
 | `box_threshold` | `0.35` | launch file | GroundingDINO box confidence cutoff |
-| `text_threshold` | `0.25` | launch file | GroundingDINO text-match cutoff |
+| `text_threshold` | `0.25` | launch file | GroundingDINO text-match confidence cutoff |
 | `depth_scale` | `0.001` | launch file | RealSense raw depth unit → metres (mm → m) |
 
 ---
 
-## Known Issues / Setup Notes
+## Hardware
 
-- **transformers >= 5.x**: The launch file's `sam_perception_node` automatically patches `PreTrainedModel.get_head_mask` at startup if it is missing. No manual downgrade needed.
-- **Controller timing**: The staggered `TimerAction` delays (5 s / 7 s / 9 s) give `controller_manager` time to come up before spawners run. Increase these on slow machines.
-- **Underlay**: Always `source /opt/ros/humble/setup.bash` before `source install/setup.bash`. Running `source install/setup.bash` alone stacks on a stale underlay and causes symbol conflicts.
-- **Model paths**: If checkpoint files are not found at startup, `sam_perception_node` will warn but continue. Models load on the first prompt once files become available.
+| Component | Details |
+|-----------|---------|
+| Robot | OpenArm v2.0 (7-DOF, right arm only) |
+| Camera | Intel RealSense D-series, wrist-mounted on the right arm |
+| GPU | Optional — GroundingDINO and MobileSAM fall back to CPU if no CUDA device is found |
+
+---
+
+## Known Issues
+
+- **transformers >= 5.x**: `sam_perception_node` automatically patches `PreTrainedModel.get_head_mask` at startup if it is missing. No manual downgrade needed.
+- **Controller timing**: The staggered startup delays (5 s / 7 s / 9 s) give `controller_manager` time to come up before controller spawners run. Increase these on slow machines by editing `servo_pipeline.launch.py`.
+- **Slow startup**: Wait for `move_group ready` and `sam_perception_node: models loaded` in the terminal output before sending a `/pick_prompt`. Sending too early is silently ignored.
+
+---
+
+## Architecture Notes
+
+### Node graph
+
+```
+            [Intel RealSense D-series]
+             /camera/color/image_raw              (RGB, 30 Hz)
+             /camera/aligned_depth_to_color/image_raw  (depth aligned to RGB)
+             /camera/color/camera_info            (intrinsic matrix K, once)
+                        │
+                        ▼
+           ┌────────────────────────────┐
+           │   sam_perception_node      │  (Python)
+           │                            │
+           │  GroundingDINO             │  text prompt → bounding boxes
+           │    └─► MobileSAM           │  bounding box → pixel mask
+           │         └─► depth          │  mask + depth + K → 3D centroid
+           │                            │
+           │  Subscribes: /segment_prompt
+           │  Publishes:  /pick_target
+           └────────────┬───────────────┘
+                        │  geometry_msgs/PointStamped
+                        │  (3D point in camera optical frame)
+                        │
+           ┌────────────▼───────────────┐
+           │   control_node             │  (C++)
+           │                            │
+           │  Subscribes: /pick_prompt  │  ← you send text here
+           │  Publishes:  /segment_prompt│
+           │  Subscribes: /pick_target  │
+           │                            │
+           │  Uses MoveIt move_group ──►│──► [MoveIt / right_arm]
+           └────────────────────────────┘
+```
+
+### Threading model
+
+`control_node` uses a `MultiThreadedExecutor` with two callback groups so that `on_pick_target()` can fire while `on_pick_prompt()` is blocked waiting for the AI result. A `SingleThreadedExecutor` would deadlock here.
+
+```
+Thread A (cbg_prompt_)                Thread B (cbg_target_)
+──────────────────────────────        ──────────────────────────
+on_pick_prompt() enters
+  move_to_scan_pose() …waits…
+  publish /segment_prompt
+  wait_for_target():
+    target_cv_.wait_for(30s) ─┐                sam_perception_node publishes
+                               │   on_pick_target() fires
+                               │     pending_target_ = *msg
+                               │     target_cv_.notify_one()
+    woken ◄────────────────────┘
+  TF2 transform
+  move_to_pick_pose()
+```
