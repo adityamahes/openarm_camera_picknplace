@@ -299,6 +299,23 @@ def generate_launch_description():
         )],
     )
 
+    # --- realsense2_camera_node ---
+    # Publishes the RealSense RGB, aligned-depth, and camera-info streams
+    # continuously so both RViz and sam_perception_node can subscribe at any time.
+    #   /camera/color/image_raw                  — RGB stream
+    #   /camera/aligned_depth_to_color/image_raw — depth aligned to the RGB frame
+    #   /camera/color/camera_info                — intrinsic matrix K
+    camera_node = Node(
+        package='realsense2_camera',
+        executable='realsense2_camera_node',
+        name='camera',
+        namespace='camera',
+        output='screen',
+        parameters=[{
+            'align_depth.enable': True,
+        }],
+    )
+
     # --- sam_perception_node ---
     # Python node that:
     #   1. Receives the text prompt on /segment_prompt.
@@ -373,6 +390,7 @@ def generate_launch_description():
         joint_state_broadcaster,    # +5 s
         arm_controller,             # +7 s
         gripper_controller,         # +9 s
+        camera_node,
         sam_node,
         control_node,
     ])
