@@ -12,7 +12,7 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(moveit_ros_planning_interface REQUIRED)
-find_package(openarm_perception_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
 include_directories(include)
 
@@ -28,7 +28,7 @@ ament_target_dependencies(multi_rate_servo_node
   tf2_ros
   tf2_geometry_msgs
   moveit_ros_planning_interface
-  openarm_perception_msgs
+  std_msgs
 )
 
 install(TARGETS multi_rate_servo_node

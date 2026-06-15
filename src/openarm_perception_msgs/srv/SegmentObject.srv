@@ -1,6 +1,0 @@
-string text_prompt
----
-bool success
-string message
-geometry_msgs/PointStamped target_position
-float32[] bounding_box

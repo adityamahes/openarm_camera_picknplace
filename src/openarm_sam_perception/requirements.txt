@@ -1,0 +1,4 @@
+groundingdino-py
+git+https://github.com/ChaoningZhang/MobileSAM.git
+torch
+numpy<2
