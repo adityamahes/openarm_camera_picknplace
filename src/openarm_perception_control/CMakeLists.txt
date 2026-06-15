@@ -16,12 +16,12 @@ find_package(std_msgs REQUIRED)
 
 include_directories(include)
 
-add_executable(multi_rate_servo_node
+add_executable(control_node
   src/main.cpp
-  src/multi_rate_servo_node.cpp
+  src/control_node.cpp
 )
 
-ament_target_dependencies(multi_rate_servo_node
+ament_target_dependencies(control_node
   rclcpp
   geometry_msgs
   sensor_msgs
@@ -31,7 +31,7 @@ ament_target_dependencies(multi_rate_servo_node
   std_msgs
 )
 
-install(TARGETS multi_rate_servo_node
+install(TARGETS control_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -57,8 +57,7 @@ class PickObjectTestClient(Node):
         self.text_prompt = text_prompt
         self.timeout_s   = timeout_s
 
-        # Create the client; the service name must match what
-        # MultiRateServoNode registers in its constructor
+        # Service name must match the one registered by control_node.
         self.client = self.create_client(PickObject, 'pick_object')
 
     def run(self) -> bool:

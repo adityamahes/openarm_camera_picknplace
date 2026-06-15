@@ -1,4 +1,4 @@
-multi_rate_servo_node:
+control_node:
   ros__parameters:
     scan_joint_values: [0.0, -0.3, 0.0, 1.6, 0.0, 1.57, 0.0]
     approach_height: 0.15
